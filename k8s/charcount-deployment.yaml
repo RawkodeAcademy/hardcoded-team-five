@@ -31,7 +31,6 @@ spec:
             cd /tmp/charcount
             go mod init charcount
             go get github.com/gorilla/mux@v1.8.0
-            go get github.com/prometheus/client_golang@v1.17.0
             cat > /tmp/charcount/main.go << 'EOFAPP'
             package main
 
@@ -41,13 +40,10 @@ spec:
               "log"
               "net/http"
               "os"
-              "strconv"
               "sync/atomic"
               "unicode/utf8"
 
               "github.com/gorilla/mux"
-              "github.com/prometheus/client_golang/prometheus"
-              "github.com/prometheus/client_golang/prometheus/promhttp"
             )
 
             type OpRequest struct {
@@ -67,20 +63,7 @@ spec:
               OK bool `json:"ok"`
             }
 
-            var (
-              requestCounter = prometheus.NewCounterVec(
-                prometheus.CounterOpts{
-                  Name: "charcount_requests_total",
-                  Help: "Total number of requests processed by charcount service",
-                },
-                []string{"endpoint", "method"},
-              )
-              requestsTotal int64
-            )
-
-            func init() {
-              prometheus.MustRegister(requestCounter)
-            }
+            var requestsTotal int64
 
             func countChars(text string) int {
               if text == "" {
@@ -91,7 +74,6 @@ spec:
 
             func handleOp(w http.ResponseWriter, r *http.Request) {
               atomic.AddInt64(&requestsTotal, 1)
-              requestCounter.WithLabelValues("op", "POST").Inc()
               
               w.Header().Set("Content-Type", "application/json")
               
@@ -128,8 +110,6 @@ spec:
             }
 
             func handleHealth(w http.ResponseWriter, r *http.Request) {
-              requestCounter.WithLabelValues("healthz", "GET").Inc()
-              
               w.Header().Set("Content-Type", "application/json")
               
               response := HealthResponse{OK: true}
@@ -138,11 +118,9 @@ spec:
 
             func handleMetrics(w http.ResponseWriter, r *http.Request) {
               w.Header().Set("Content-Type", "text/plain")
-              fmt.Fprintf(w, "# HELP charcount_requests_total Total requests processed\n")
-              fmt.Fprintf(w, "# TYPE charcount_requests_total counter\n")
-              fmt.Fprintf(w, "charcount_requests_total %d\n", atomic.LoadInt64(&requestsTotal))
-              
-              promhttp.Handler().ServeHTTP(w, r)
+              fmt.Fprintf(w, "# HELP charcount_requests_total Total requests processed\\n")
+              fmt.Fprintf(w, "# TYPE charcount_requests_total counter\\n")
+              fmt.Fprintf(w, "charcount_requests_total %d\\n", atomic.LoadInt64(&requestsTotal))
             }
 
             func main() {
