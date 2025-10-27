@@ -1,0 +1,16 @@
+{
+	"name": "unique-words",
+	"version": "0.0.1-dev",
+	"private": true,
+	"scripts": {
+		"start": "npm run tsc && node start.js",
+		"tsc": "tsc --build ."
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@types/express": "^5.0.4",
+		"express": "^5.1.0"
+	}
+}
