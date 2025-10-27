@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: normalizer-python-code
+  namespace: team-five
+data:
+  app.py: |
+    from flask import Flask, request, jsonify
+    from prometheus_client import Counter, generate_latest
+    import unicodedata
+    import re
+    import os
+
+    app = Flask(__name__)
+
+    # Prometheus metrics
+    request_counter = Counter('python_requests_total', 'Total requests', ['endpoint'])
+
+    def strip_diacritics(text):
+        """Remove diacritical marks from text"""
+        nfd = unicodedata.normalize('NFD', text)
+        return ''.join(char for char in nfd if unicodedata.category(char) != 'Mn')
+
+    def normalize_text(text):
+        """NFKC normalize, lowercase, collapse whitespace, strip diacritics"""
+        if not text:
+            return None
+        
+        # NFKC normalization
+        normalized = unicodedata.normalize('NFKC', text)
+        
+        # Strip diacritics
+        normalized = strip_diacritics(normalized)
+        
+        # Lowercase
+        normalized = normalized.lower()
+        
+        # Collapse whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized if normalized else None
+
+    @app.route('/healthz', methods=['GET'])
+    def health():
+        request_counter.labels(endpoint='healthz').inc()
+        return jsonify({"ok": True})
+
+    @app.route('/metrics', methods=['GET'])
+    def metrics():
+        return generate_latest()
+
+    @app.route('/op', methods=['POST'])
+    def op():
+        request_counter.labels(endpoint='op').inc()
+        
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return jsonify({"key": "normalized", "value": None, "cache_hit": False})
+        
+        text = data.get('text', '')
+        normalized = normalize_text(text)
+        
+        return jsonify({
+            "key": "normalized",
+            "value": normalized,
+            "cache_hit": False
+        })
+
+    if __name__ == '__main__':
+        port = int(os.getenv('PORT', 8085))
+        app.run(host='0.0.0.0', port=port)
+  requirements.txt: |
+    flask==3.0.0
+    prometheus-client==0.19.0
+    gunicorn==21.2.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: normalizer-python
+  namespace: team-five
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8085"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: normalizer-python
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8085
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: normalizer-python
+  namespace: team-five
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: normalizer-python
+  template:
+    metadata:
+      labels:
+        app: normalizer-python
+    spec:
+      containers:
+      - name: normalizer
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8085
+        env:
+        - name: PORT
+          value: "8085"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 20
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install --no-cache-dir -r /app/requirements.txt && \
+            exec gunicorn --bind 0.0.0.0:8085 --workers 2 --threads 2 --chdir /app app:app
+      volumes:
+      - name: app-code
+        configMap:
+          name: normalizer-python-code

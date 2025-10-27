@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: entropy-python-code
+  namespace: team-five
+data:
+  app.py: |
+    from flask import Flask, request, jsonify
+    from prometheus_client import Counter, generate_latest
+    import math
+    import os
+
+    app = Flask(__name__)
+
+    # Prometheus metrics
+    request_counter = Counter('python_requests_total', 'Total requests', ['endpoint'])
+
+    def calculate_entropy(text):
+        """Calculate Shannon entropy over code points, 3 decimal places"""
+        if not text:
+            return 0.0
+        
+        # Count frequency of each character
+        char_counts = {}
+        for char in text:
+            char_counts[char] = char_counts.get(char, 0) + 1
+        
+        # Calculate entropy
+        length = len(text)
+        entropy = 0.0
+        
+        for count in char_counts.values():
+            if count > 0:
+                probability = count / length
+                entropy -= probability * math.log2(probability)
+        
+        # Round to 3 decimal places
+        return round(entropy, 3)
+
+    @app.route('/healthz', methods=['GET'])
+    def health():
+        request_counter.labels(endpoint='healthz').inc()
+        return jsonify({"ok": True})
+
+    @app.route('/metrics', methods=['GET'])
+    def metrics():
+        return generate_latest()
+
+    @app.route('/op', methods=['POST'])
+    def op():
+        request_counter.labels(endpoint='op').inc()
+        
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return jsonify({"key": "entropy", "value": 0.0, "cache_hit": False})
+        
+        text = data.get('text', '')
+        entropy = calculate_entropy(text)
+        
+        return jsonify({
+            "key": "entropy",
+            "value": entropy,
+            "cache_hit": False
+        })
+
+    if __name__ == '__main__':
+        port = int(os.getenv('PORT', 8085))
+        app.run(host='0.0.0.0', port=port)
+  requirements.txt: |
+    flask==3.0.0
+    prometheus-client==0.19.0
+    gunicorn==21.2.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: entropy-python
+  namespace: team-five
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8085"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: entropy-python
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8085
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: entropy-python
+  namespace: team-five
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: entropy-python
+  template:
+    metadata:
+      labels:
+        app: entropy-python
+    spec:
+      containers:
+      - name: entropy
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8085
+        env:
+        - name: PORT
+          value: "8085"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 20
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install --no-cache-dir -r /app/requirements.txt && \
+            exec gunicorn --bind 0.0.0.0:8085 --workers 2 --threads 2 --chdir /app app:app
+      volumes:
+      - name: app-code
+        configMap:
+          name: entropy-python-code
