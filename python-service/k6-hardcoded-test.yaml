@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-hardcoded-test
+  namespace: team-five
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      containers:
+      - name: k6
+        image: grafana/k6
+        command: ["k6", "run", "/scripts/analyze.bundle.js"]
+        env:
+        - name: AGGREGATOR_URL
+          value: "http://python-service"
+        volumeMounts:
+        - name: k6-bundle
+          mountPath: /scripts
+      volumes:
+      - name: k6-bundle
+        configMap:
+          name: k6-test-bundle
+      restartPolicy: Never
+  backoffLimit: 0
