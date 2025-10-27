@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: charcount
+  namespace: team-five
+  labels:
+    app: charcount
+    service: text-analysis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: charcount
+  template:
+    metadata:
+      labels:
+        app: charcount
+    spec:
+      containers:
+      - name: charcount
+        image: team-five/charcount:latest
+        ports:
+        - containerPort: 8007
+        env:
+        - name: PORT
+          value: "8007"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8007
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8007
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: charcount-service
+  namespace: team-five
+  labels:
+    app: charcount
+spec:
+  selector:
+    app: charcount
+  ports:
+  - protocol: TCP
+    port: 8007
+    targetPort: 8007
+  type: ClusterIP
