@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unique-words-python-code
+  namespace: team-five
+data:
+  app.py: |
+    from flask import Flask, request, jsonify
+    from prometheus_client import Counter, generate_latest
+    import logging
+
+    app = Flask(__name__)
+
+    # Prometheus metrics
+    request_counter = Counter('python_requests_total', 'Total requests processed')
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+
+    @app.route('/healthz', methods=['GET'])
+    def health():
+        """Health check endpoint"""
+        return jsonify({"ok": True}), 200
+
+
+    @app.route('/metrics', methods=['GET'])
+    def metrics():
+        """Prometheus metrics endpoint"""
+        metrics_output = generate_latest()
+        return metrics_output, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+
+    @app.route('/op', methods=['POST'])
+    def op():
+        """Operation endpoint - counts unique words"""
+        request_counter.inc()
+        
+        try:
+            data = request.get_json()
+            
+            if not data or 'text' not in data or not isinstance(data['text'], str):
+                return jsonify({
+                    "key": "unique_words",
+                    "value": 0,
+                    "cache_hit": False
+                }), 200
+            
+            # Split by spaces and count unique words
+            text = data['text']
+            words = text.split()
+            unique_count = len(set(words))
+            
+            return jsonify({
+                "key": "unique_words",
+                "value": unique_count,
+                "cache_hit": False
+            }), 200
+        
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            return jsonify({
+                "key": "unique_words",
+                "value": 0,
+                "cache_hit": False
+            }), 200
+
+
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=8085)
+  requirements.txt: |
+    flask==3.0.0
+    prometheus-client==0.19.0
+    gunicorn==21.2.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unique-words-python
+  namespace: team-five
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8085"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: unique-words-python
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8085
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unique-words-python
+  namespace: team-five
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: unique-words-python
+  template:
+    metadata:
+      labels:
+        app: unique-words-python
+    spec:
+      containers:
+      - name: unique-words
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8085
+        env:
+        - name: PORT
+          value: "8085"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8085
+          initialDelaySeconds: 50
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install --no-cache-dir -r /app/requirements.txt && \
+            exec gunicorn --bind 0.0.0.0:8085 --workers 2 --threads 2 --chdir /app app:app
+      volumes:
+      - name: app-code
+        configMap:
+          name: unique-words-python-code
